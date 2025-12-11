@@ -1,7 +1,10 @@
-name: cd
+name: CI/CD
+
 on:
   push:
     branches: [ main ]
+  workflow_dispatch:
+
 jobs:
   build_test:
     runs-on: windows-latest
@@ -10,7 +13,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '18'
-      - name: Install deps
+      - name: Install dependencies
         shell: pwsh
         run: |
           cd services/transaction-validator
@@ -21,40 +24,9 @@ jobs:
           cd services/transaction-validator
           npm test --silent
 
-  generate_docs:
-    runs-on: windows-latest
-    needs: build_test
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '18'
-      - name: Render diagrams
-        shell: pwsh
-        run: |
-          cd services/transaction-validator
-          npm install
-          npm run render-diagrams
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-      - name: Generate evidence images
-        shell: pwsh
-        run: |
-          pip install rich matplotlib requests
-          python tools/evidence_runner.py
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: evidence-assets
-          path: |
-            docs/diagrams/**
-            docs/technical_report_images.docx
-
   deploy_canary:
     runs-on: self-hosted
-    needs: generate_docs
+    needs: build_test
     steps:
       - uses: actions/checkout@v4
       - name: Start stack
