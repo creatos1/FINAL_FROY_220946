@@ -1,4 +1,4 @@
-name: CI/CD
+name: CI/CD Pipeline
 
 on:
   push:
@@ -7,49 +7,43 @@ on:
 
 jobs:
   build_test:
-    runs-on: windows-latest
+    runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v4
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
         with:
           node-version: '18'
 
       - name: Install dependencies
-        shell: pwsh
-        run: |
-          cd services/transaction-validator
-          npm install
+        working-directory: services/transaction-validator
+        run: npm install
 
       - name: Run tests
-        shell: pwsh
-        run: |
-          cd services/transaction-validator
-          npm test --silent
+        working-directory: services/transaction-validator
+        run: npm test --silent
 
   deploy_canary:
-    runs-on: windows-latest
+    runs-on: ubuntu-latest
     needs: build_test
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-      - name: Start stack
-        shell: pwsh
-        run: |
-          docker compose up -d reverse-proxy prometheus grafana loki promtail jaeger transaction-validator-blue
+      - name: Copy .env
+        run: echo -e "NGINX_BLUE_WEIGHT=100\nNGINX_GREEN_WEIGHT=0" > .env
+
+      - name: Start Docker stack
+        run: docker compose --env-file .env up -d reverse-proxy prometheus grafana loki promtail jaeger transaction-validator-blue
 
       - name: Canary deploy
-        shell: pwsh
-        run: |
-          powershell -File scripts/deploy.ps1 -CanaryWeight 10 -FinalWeight 100 -BlueWeightAfterFinal 0
+        run: powershell -File scripts/deploy.ps1 -CanaryWeight 10 -FinalWeight 100 -BlueWeightAfterFinal 0
 
       - name: Validate health
-        shell: pwsh
-        run: |
-          curl -s http://localhost:8080/health
+        run: curl -s http://localhost:8080/health
 
       - name: Rollback on failure
         if: failure()
-        shell: pwsh
-        run: |
-          powershell -File scripts/rollback.ps1
+        run: powershell -File scripts/rollback.ps1
