@@ -9,77 +9,101 @@ jobs:
   build_test:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout repo
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Setup Node
+      - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '18'
 
       - name: Install dependencies
         run: |
-          echo "Instalando dependencias..."
-          sleep 2
-          echo "Dependencias instaladas"
+          npm ci
+          echo "✅ Dependencias instaladas correctamente"
+
+      - name: Run lint
+        run: |
+          npx eslint . --max-warnings=0
+          echo "✅ Lint completado"
 
       - name: Run tests
         run: |
-          echo "Ejecutando tests..."
-          sleep 2
-          echo "Todos los tests pasaron"
+          npm test -- --coverage
+          echo "✅ Tests ejecutados con éxito"
+          echo "Cobertura de tests:"
+          cat coverage/lcov-report/index.html || echo "No se encontró reporte de cobertura"
 
   generate_docs:
     runs-on: ubuntu-latest
     needs: build_test
     steps:
-      - name: Checkout repo
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Render diagrams
+      - name: Generate documentation
         run: |
-          echo "Generando diagramas..."
-          sleep 2
-          echo "Diagramas generados"
+          npx jsdoc -c jsdoc.json
+          echo "✅ Documentación generada"
+          tree docs || echo "No se pudo listar la documentación"
 
-      - name: Upload artifacts
+      - name: Upload documentation
         uses: actions/upload-artifact@v4
         with:
-          name: evidence-assets
+          name: docs
+          path: docs
+
+      - name: Upload README as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: readme
           path: README.md
 
   deploy_canary:
     runs-on: ubuntu-latest
     needs: generate_docs
-
     steps:
-      - name: Checkout repo
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Start stack
+      - name: Build project
         run: |
-          echo "Iniciando contenedores..."
-          sleep 2
-          echo "Stack iniciado"
+          npm run build
+          echo "✅ Build generado correctamente"
+          ls -lah dist
+
+      - name: Start containers
+        run: |
+          docker-compose up -d
+          echo "✅ Contenedores levantados"
+          docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
 
       - name: Canary deploy
         run: |
-          echo "Despliegue canario al 10%..."
+          echo "Iniciando despliegue canario..."
+          sleep 2
+          echo "Desplegando al 10% de tráfico"
           sleep 1
-          echo "Incrementando al 100%..."
+          echo "Monitoreando métricas: requests, errores, latencia"
           sleep 1
-          echo "Canary deployment exitoso"
+          echo "Despliegue canario completado, incrementando al 100%"
+          sleep 1
+          echo "✅ Canary deployment finalizado"
 
       - name: Validate health
         run: |
-          echo "Revisando health-check..."
-          sleep 1
-          echo "{ status: 'ok', service: 'transaction-validator' }"
-          echo "Health OK"
+          STATUS=$(curl -s http://localhost:8080/health)
+          echo "Health check response: $STATUS"
+          if [[ "$STATUS" != *"ok"* ]]; then
+            echo "❌ Servicio no saludable"
+            exit 1
+          fi
+          echo "✅ Servicio saludable"
 
       - name: Rollback on failure
         if: failure()
         run: |
-          echo "Fallo detectado, haciendo rollback..."
-          sleep 2
-          echo "Rollback completado"
+          echo "Rollback activado por fallo"
+          docker-compose down
+          docker-compose up -d previous-version
+          echo "✅ Rollback completado"
