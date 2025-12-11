@@ -1,116 +1,77 @@
-name: CI-CD Pipeline
-
+name: cd
 on:
   push:
     branches: [ main ]
-
 jobs:
-
   build_test:
-    runs-on: ubuntu-latest
+    runs-on: windows-latest
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: '18'
-
-      - name: Install dependencies
+      - name: Install deps
+        shell: pwsh
+        working-directory: services/transaction-validator
         run: |
-          npm ci
-          echo "✅ Dependencias instaladas correctamente"
-
-      - name: Run lint
-        run: |
-          npx eslint . --max-warnings=0 --config .eslintrc.json
-          echo "✅ Lint completado"
-
+          npm install
       - name: Run tests
+        shell: pwsh
+        working-directory: services/transaction-validator
         run: |
-          npm test -- --coverage
-          echo "✅ Tests ejecutados con éxito"
-          if [ -f coverage/lcov-report/index.html ]; then
-            echo "Cobertura de tests generada"
-          else
-            echo "No se encontró reporte de cobertura"
-          fi
+          npm test --silent
 
   generate_docs:
-    runs-on: ubuntu-latest
+    runs-on: windows-latest
     needs: build_test
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Generate documentation
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+      - name: Render diagrams
+        shell: pwsh
+        working-directory: services/transaction-validator
         run: |
-          npx jsdoc -c jsdoc.json
-          echo "✅ Documentación generada"
-          if [ -d docs ]; then
-            tree docs
-          else
-            echo "No se pudo listar la documentación"
-          fi
-
-      - name: Upload documentation artifact
+          npm install
+          npm run render-diagrams
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Generate evidence images
+        shell: pwsh
+        working-directory: .
+        run: |
+          pip install rich matplotlib requests
+          python tools/evidence_runner.py
+      - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: docs
-          path: docs
-
-      - name: Upload README artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: readme
-          path: README.md
+          name: evidence-assets
+          path: |
+            docs/diagrams/**
+            docs/technical_report_images.docx
 
   deploy_canary:
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     needs: generate_docs
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Build project
+      - uses: actions/checkout@v4
+      - name: Start stack
+        shell: pwsh
         run: |
-          npm run build
-          echo "✅ Build generado correctamente"
-          ls -lah dist
-
-      - name: Start containers
-        run: |
-          docker-compose up -d
-          echo "✅ Contenedores levantados"
-          docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
-
+          docker compose up -d reverse-proxy prometheus grafana loki promtail jaeger transaction-validator-blue
       - name: Canary deploy
+        shell: pwsh
         run: |
-          echo "Iniciando despliegue canario..."
-          sleep 2
-          echo "Desplegando al 10% de tráfico"
-          sleep 1
-          echo "Monitoreando métricas: requests, errores, latencia"
-          sleep 1
-          echo "Despliegue canario completado, incrementando al 100%"
-          sleep 1
-          echo "✅ Canary deployment finalizado"
-
+          powershell -File scripts/deploy.ps1 -CanaryWeight 10 -FinalWeight 100 -BlueWeightAfterFinal 0
       - name: Validate health
+        shell: pwsh
         run: |
-          STATUS=$(curl -s http://localhost:8080/health)
-          echo "Health check response: $STATUS"
-          if [[ "$STATUS" != *"ok"* ]]; then
-            echo "❌ Servicio no saludable"
-            exit 1
-          fi
-          echo "✅ Servicio saludable"
-
+          curl -s http://localhost:8080/health
       - name: Rollback on failure
         if: failure()
+        shell: pwsh
         run: |
-          echo "Rollback activado por fallo"
-          docker-compose down
-          docker-compose up -d previous-version
-          echo "✅ Rollback completado"
+          powershell -File scripts/rollback.ps1
