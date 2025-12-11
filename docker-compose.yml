@@ -1,0 +1,102 @@
+services:
+  reverse-proxy:
+    container_name: reverse-proxy
+    image: nginx:1.25-alpine
+    ports:
+      - "8080:80"
+    environment:
+      - NGINX_BLUE_WEIGHT=100
+      - NGINX_GREEN_WEIGHT=1
+    volumes:
+      - ./nginx/nginx.template.conf:/etc/nginx/nginx.template.conf:ro
+    command: >
+      /bin/sh -c "
+        envsubst '$NGINX_BLUE_WEIGHT $NGINX_GREEN_WEIGHT' < /etc/nginx/nginx.template.conf > /etc/nginx/nginx.conf &&
+        nginx -g 'daemon off;'
+      "
+    depends_on:
+      - transaction-validator-blue
+      - transaction-validator-green
+    networks:
+      - monitor
+
+  transaction-validator-blue:
+    build:
+      context: ./services/transaction-validator
+    environment:
+      - SERVICE_COLOR=blue
+      - OTLP_ENDPOINT=http://jaeger:4318/v1/traces
+      - LOG_LEVEL=info
+      - CHAOS_ERROR_RATE=0.02
+    networks:
+      - monitor
+
+  transaction-validator-green:
+    build:
+      context: ./services/transaction-validator
+    environment:
+      - SERVICE_COLOR=green
+      - OTLP_ENDPOINT=http://jaeger:4318/v1/traces
+      - LOG_LEVEL=info
+      - CHAOS_ERROR_RATE=0.02
+    deploy:
+      replicas: 1
+    networks:
+      - monitor
+
+  prometheus:
+    image: prom/prometheus:v2.55.1
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    networks:
+      - monitor
+
+  grafana:
+    image: grafana/grafana:11.2.0
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+    volumes:
+      - ./grafana/provisioning/datasources:/etc/grafana/provisioning/datasources
+      - ./grafana/provisioning/dashboards:/var/lib/grafana/dashboards
+    networks:
+      - monitor
+    depends_on:
+      - prometheus
+      - loki
+
+  loki:
+    image: grafana/loki:3.1.1
+    ports:
+      - "3100:3100"
+    networks:
+      - monitor
+
+  promtail:
+    image: grafana/promtail:3.1.1
+    volumes:
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - ./promtail/config.yml:/etc/promtail/config.yml:ro
+    command: -config.file=/etc/promtail/config.yml
+    networks:
+      - monitor
+    depends_on:
+      - loki
+
+  jaeger:
+    image: jaegertracing/all-in-one:1.48
+    environment:
+      - COLLECTOR_OTLP_ENABLED=true
+    ports:
+      - "16686:16686"
+      - "4318:4318"
+    networks:
+      - monitor
+
+networks:
+  monitor:
+    driver: bridge

@@ -1,0 +1,12 @@
+# Node modules
+node_modules/
+
+# Logs
+*.log
+
+# Docker
+*.env
+.DS_Store
+
+# Otros archivos temporales
+*.tmp
